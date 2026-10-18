@@ -1,0 +1,11 @@
+{
+  "title": "Sample Comic",
+  "author": "Your Name",
+  "description": "A sample comic to demonstrate the viewer",
+  "direction": "ltr",
+  "pages": [
+    "001.png",
+    "002.png",
+    "003.png"
+  ]
+}
