@@ -2,6 +2,8 @@
 
 An embeddable, lightweight comic reader for static websites. Host your comic images anywhere and view them with a beautiful, full-featured reader interface.
 
+**Live demo:** https://thevoidis.github.io/Thevoidis-Comic-Viewer/
+
 ## Features
 
 - **Multiple View Modes**: Single page, double page spread, or continuous scroll
@@ -46,12 +48,32 @@ your-site.com/
 
 ```html
 <iframe
-  src="https://your-site.com/comic-viewer/?comic=/comics/my-comic/"
+  src="https://thevoidis.github.io/Thevoidis-Comic-Viewer/?comic=/comics/my-comic/"
   width="100%"
   height="800"
   style="border: none;"
   allowfullscreen
 ></iframe>
+```
+
+## Deployment
+
+This repo auto-deploys to GitHub Pages via GitHub Actions.
+
+### Setup
+
+1. Go to your repo **Settings → Pages**
+2. Under **Build and deployment → Source**, select **GitHub Actions**
+3. Push to `main` — the workflow in `.github/workflows/deploy.yml` will build and deploy automatically
+
+The viewer will be live at: `https://<username>.github.io/<repo-name>/`
+
+### Manual deployment
+
+```bash
+npm install
+npm run build
+# Upload the contents of dist/ to your hosting
 ```
 
 ## URL Parameters
@@ -102,18 +124,16 @@ your-site.com/
 | `F` | Toggle fullscreen |
 | `Esc` | Close thumbnails |
 
-## Hugo Integration
+## Hugo Integration (Thevoidis.github.io)
 
-For Hugo sites (like Thevoidis.github.io):
+For your Hugo site:
 
-1. Build this project: `npm run build`
-2. Copy the `dist/` folder to `static/comic-viewer/` in your Hugo site
-3. Add comic files to `static/comics/my-comic/`
-4. Embed in your content:
+1. Add comic files to `static/comics/<comic-name>/` (images + `manifest.json`)
+2. Embed in your content or template:
 
 ```html
 <iframe
-  src="/comic-viewer/?comic=/comics/my-comic/"
+  src="https://thevoidis.github.io/Thevoidis-Comic-Viewer/?comic=/comics/<comic-name>/"
   width="100%"
   height="800"
   style="border: none;"
@@ -121,12 +141,14 @@ For Hugo sites (like Thevoidis.github.io):
 ></iframe>
 ```
 
+Since both the viewer and the comics are on the same GitHub Pages domain, relative paths like `/comics/<name>/` work perfectly.
+
 ## Development
 
 ```bash
 npm install
-npm run dev     # Start dev server
-npm run build   # Production build
+npm run dev     # Start dev server at http://localhost:3000
+npm run build   # Production build to dist/
 ```
 
 ## License
