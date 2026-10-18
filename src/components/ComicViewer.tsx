@@ -8,6 +8,14 @@ interface Props {
   startPage: number;
 }
 
+/** First (lowest-index) page of the double-page spread that contains `page`.
+ *  Page 0 (the cover) is displayed on its own, then pages pair up as [1,2], [3,4], ... */
+const spreadStartFor = (page: number, totalPages: number): number => {
+  if (page <= 0) return 0;
+  const start = page % 2 === 1 ? page : page - 1;
+  return start >= totalPages ? totalPages - 1 : start;
+};
+
 export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) {
   const [state, setState] = useState<ViewerState>({
     currentPage: startPage,
@@ -23,6 +31,12 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
 
+  // Sync between continuous-scroll view and currentPage (slider/keyboard/thumbnails)
+  const scrollPageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const currentPageRef = useRef(state.currentPage);
+  const userScrolledRef = useRef(false);
+  currentPageRef.current = state.currentPage;
+
   const totalPages = manifest.pages.length;
 
   const goToPage = useCallback((page: number) => {
@@ -31,20 +45,29 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
   }, [totalPages]);
 
   const nextPage = useCallback(() => {
-    if (state.direction === 'rtl') {
+    if (state.viewMode === 'double') {
+      // Advance by a whole spread so the visible pages actually change on every press
+      const start = spreadStartFor(state.currentPage, totalPages);
+      const dir = state.direction === 'rtl' ? -1 : 1;
+      goToPage(start === 0 && dir === 1 ? 1 : start + 2 * dir);
+    } else if (state.direction === 'rtl') {
       goToPage(state.currentPage - 1);
     } else {
       goToPage(state.currentPage + 1);
     }
-  }, [state.currentPage, state.direction, goToPage]);
+  }, [state.currentPage, state.direction, state.viewMode, goToPage, totalPages]);
 
   const prevPage = useCallback(() => {
-    if (state.direction === 'rtl') {
+    if (state.viewMode === 'double') {
+      const start = spreadStartFor(state.currentPage, totalPages);
+      const dir = state.direction === 'rtl' ? -1 : 1;
+      goToPage(start === 1 && dir === 1 ? 0 : start - 2 * dir);
+    } else if (state.direction === 'rtl') {
       goToPage(state.currentPage + 1);
     } else {
       goToPage(state.currentPage - 1);
     }
-  }, [state.currentPage, state.direction, goToPage]);
+  }, [state.currentPage, state.direction, state.viewMode, goToPage, totalPages]);
 
   const setViewMode = useCallback((mode: ViewMode) => {
     setState(prev => ({ ...prev, viewMode: mode }));
@@ -165,6 +188,63 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
+  // Keep the continuous-scroll view synced with currentPage (slider, keyboard,
+  // thumbnails, or switching into scroll mode all land on the right page).
+  // Changes that originated from the user scrolling are skipped so we never
+  // fight with their scroll position.
+  useEffect(() => {
+    const wasUserScroll = userScrolledRef.current;
+    userScrolledRef.current = false;
+    if (state.viewMode !== 'scroll' || wasUserScroll) return;
+    scrollPageRefs.current[state.currentPage]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, [state.currentPage, state.viewMode]);
+
+  // Keep currentPage — and therefore the bottom slider and page counter — in
+  // sync with the scroll position while reading in continuous-scroll mode.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || state.viewMode !== 'scroll') return;
+
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const refs = scrollPageRefs.current;
+      let best = 0;
+      if (container.scrollTop <= 1) {
+        best = 0; // at the very top
+      } else if (container.scrollHeight - container.scrollTop - container.clientHeight <= 2) {
+        best = refs.length - 1; // at the very bottom
+      } else {
+        // The current page is the last one whose top has crossed the middle
+        // of the viewport.
+        const probe = container.getBoundingClientRect().top + container.clientHeight * 0.5;
+        for (let i = 0; i < refs.length; i++) {
+          const el = refs[i];
+          if (!el) continue;
+          if (el.getBoundingClientRect().top <= probe) best = i;
+        }
+      }
+      if (best !== currentPageRef.current) {
+        userScrolledRef.current = true;
+        setState(prev => (prev.currentPage === best ? prev : { ...prev, currentPage: best }));
+      }
+    };
+
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(update);
+    };
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [state.viewMode]);
+
   const renderPage = (pageIndex: number, key?: string) => {
     const page = manifest.pages[pageIndex];
     if (!page) return null;
@@ -175,6 +255,11 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
     return (
       <div
         key={key || `page-${pageIndex}`}
+        ref={
+          state.viewMode === 'scroll'
+            ? (el) => { scrollPageRefs.current[pageIndex] = el; }
+            : undefined
+        }
         className="flex items-center justify-center"
         style={{ minHeight: state.viewMode === 'scroll' ? 'auto' : '100%' }}
       >
@@ -197,14 +282,26 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
     );
   };
 
+  // Pages visible for the current view (double mode shows a whole spread)
+  const spreadStart =
+    state.viewMode === 'double' ? spreadStartFor(state.currentPage, totalPages) : state.currentPage;
+  const spreadEnd =
+    state.viewMode === 'double' && spreadStart > 0 && spreadStart + 1 < totalPages
+      ? spreadStart + 1
+      : spreadStart;
+  const pageLabel =
+    spreadStart === spreadEnd
+      ? `${spreadStart + 1} / ${totalPages}`
+      : `${spreadStart + 1}–${spreadEnd + 1} / ${totalPages}`;
+
   return (
     <div
       ref={containerRef}
       className="relative w-full h-screen bg-gray-950 overflow-hidden flex flex-col"
       onMouseMove={resetControlsTimeout}
       onClick={(e) => {
-        // Click left/right side to navigate in single mode
-        if (state.viewMode === 'single' && !(e.target as HTMLElement).closest('button, .controls-area')) {
+        // Click left/right side to navigate in single/double page modes
+        if (state.viewMode !== 'scroll' && !(e.target as HTMLElement).closest('button, .controls-area')) {
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
           const x = e.clientX - rect.left;
           const width = rect.width;
@@ -328,7 +425,7 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
                   key={idx}
                   onClick={() => { goToPage(idx); if (state.viewMode !== 'scroll') toggleThumbnails(); }}
                   className={`w-full rounded overflow-hidden transition-all ${
-                    idx === state.currentPage
+                    idx >= spreadStart && idx <= spreadEnd
                       ? 'ring-2 ring-blue-500 shadow-lg shadow-blue-500/20'
                       : 'opacity-60 hover:opacity-100'
                   }`}
@@ -357,22 +454,17 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
         {/* Comic display area */}
         <div
           ref={scrollContainerRef}
-          className={`flex-1 overflow-auto flex items-center justify-center ${
-            state.viewMode === 'scroll' ? 'flex-col' : ''
+          className={`flex-1 overflow-auto flex items-center ${
+            state.viewMode === 'scroll' ? 'flex-col justify-start' : 'justify-center'
           }`}
         >
           {state.viewMode === 'single' && renderPage(state.currentPage)}
           {state.viewMode === 'double' && (
             <div className="flex items-center justify-center gap-1 h-full w-full">
-              {state.currentPage % 2 === 0 && state.currentPage > 0
-                ? renderPage(state.currentPage - 1, 'left')
-                : null}
-              {renderPage(state.currentPage, 'right')}
-              {state.currentPage % 2 === 0 && state.currentPage < totalPages - 1
-                ? null
-                : state.currentPage < totalPages - 1
-                ? renderPage(state.currentPage + 1, 'right2')
-                : null}
+              {spreadStart === 0
+                ? renderPage(0, 'cover')
+                : renderPage(spreadStart, 'left')}
+              {spreadEnd > spreadStart && renderPage(spreadEnd, 'right')}
             </div>
           )}
           {state.viewMode === 'scroll' && (
@@ -416,8 +508,8 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
                   [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full 
                   [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0"
               />
-              <span className="text-gray-400 text-xs whitespace-nowrap min-w-[4rem] text-right">
-                {state.currentPage + 1} / {totalPages}
+              <span className="text-gray-400 text-xs whitespace-nowrap min-w-[6rem] text-right">
+                {pageLabel}
               </span>
             </div>
 
@@ -435,8 +527,8 @@ export default function ComicViewer({ manifest, getPageUrl, startPage }: Props) 
         </div>
       </div>
 
-      {/* Navigation arrows (visible on hover in single mode) */}
-      {state.viewMode === 'single' && state.showControls && (
+      {/* Navigation arrows (visible on hover in single/double modes) */}
+      {state.viewMode !== 'scroll' && state.showControls && (
         <>
           <button
             onClick={(e) => { e.stopPropagation(); prevPage(); }}
